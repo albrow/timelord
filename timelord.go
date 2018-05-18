@@ -8,8 +8,8 @@ import (
 	"github.com/bouk/monkey"
 )
 
-var mut = &sync.Mutex{}
-var isTimeLord bool
+var globalMut = &sync.Mutex{}
+var timeLordExists bool
 
 // TimeLord is capable of manipulating time by monkey-patching time.Now.
 type TimeLord struct {
@@ -19,25 +19,37 @@ type TimeLord struct {
 
 // New returns a new TimeLord with a time offset of 0. It is not safe to create
 // more than one TimeLord at a time, so subsequent calls to New will return an
-// error.
+// error, unless this TimeLord is destroyed.
 func New() (*TimeLord, error) {
-	mut.Lock()
-	defer mut.Unlock()
-	if isTimeLord {
+	globalMut.Lock()
+	defer globalMut.Unlock()
+	if timeLordExists {
 		return nil, fmt.Errorf("timelord.New has already been called (only one TimeLord can be created at a time)")
 	}
 	tl := &TimeLord{}
-	tl.Warp()
+	tl.warp()
+	timeLordExists = true
 	return tl, nil
 }
 
-// Warp monkey-patches time.Now to return the current time + offset.
-func (tl *TimeLord) Warp() {
-	mut.Lock()
-	defer mut.Unlock()
-	if tl.guard != nil {
-		tl.guard.Restore()
-	}
+// SetOffset sets the time offset, which has the effect of making time.Now
+// return the current time + offset.
+func (tl *TimeLord) SetOffset(d time.Duration) {
+	tl.offset = d
+}
+
+// Destroy destroys the current TimeLord, restores time.Now to its default
+// behavior, and allows a new one to be created via New.
+func (tl *TimeLord) Destroy() {
+	globalMut.Lock()
+	defer globalMut.Unlock()
+	tl.unwarp()
+	tl.guard = nil
+	timeLordExists = false
+}
+
+// warp monkey-patches time.Now to return the current time + offset.
+func (tl *TimeLord) warp() {
 	tl.guard = monkey.Patch(time.Now, func() time.Time {
 		tl.guard.Unpatch()
 		defer tl.guard.Restore()
@@ -46,13 +58,9 @@ func (tl *TimeLord) Warp() {
 	})
 }
 
-// Unwarp restores time.Now to its original functionality.
-func (tl *TimeLord) Unwarp() {
-	tl.guard.Unpatch()
-}
-
-// SetOffset sets the time offset. You do not need to call Warp again after
-// setting the offset.
-func (tl *TimeLord) SetOffset(d time.Duration) {
-	tl.offset = d
+// unwarp restores time.Now to its original functionality.
+func (tl *TimeLord) unwarp() {
+	if tl.guard != nil {
+		tl.guard.Unpatch()
+	}
 }
